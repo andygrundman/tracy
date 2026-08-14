@@ -16,13 +16,18 @@
 #  endif
 #  include <winsock2.h>
 #  include <ws2tcpip.h>
+#  include "TracyWinFamily.hpp"
 #  ifdef _MSC_VER
 #    pragma warning(disable:4244)
 #    pragma warning(disable:4267)
 #  endif
 #  define poll WSAPoll
 #  ifdef _MSC_VER
-#    pragma comment(lib, "ws2_32.lib")
+#    ifdef TRACY_UWP
+#      pragma comment(lib, "WindowsApp.lib")
+#    else
+#      pragma comment(lib, "ws2_32.lib")
+#    endif
 #  endif
 #else
 #  include <arpa/inet.h>

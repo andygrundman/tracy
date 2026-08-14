@@ -321,7 +321,8 @@ static inline void CpuId( uint32_t* regs, uint32_t leaf )
 
 static void InitFailure( const char* msg )
 {
-#if defined TRACY_GDK
+#if defined TRACY_WIN32_NO_DESKTOP
+    // AttachConsole() and MessageBox() are desktop-only, so the debugger output is all we have.
     const char* format = "Tracy Profiler initialization failure: %s\n";
     const int length = snprintf( nullptr, 0, format, msg );
     char* buffer = (char*)alloca( length + 1 );
@@ -355,9 +356,7 @@ static void InitFailure( const char* msg )
     }
     else
     {
-#  ifndef TRACY_UWP
         MessageBoxA( nullptr, msg, "Tracy Profiler initialization failure", MB_ICONSTOP );
-#  endif
     }
 #else
     fprintf( stderr, "Tracy Profiler initialization failure: %s\n", msg );
@@ -513,7 +512,11 @@ static const char* GetHostInfo()
 {
     static char buf[1024];
     auto ptr = buf;
-#if defined _WIN32
+#if defined TRACY_UWP
+    // Neither GetVersionEx() nor ntdll.dll are reachable from an app container. The app
+    // can report the real OS version through TracyAppInfo() if it needs it.
+    ptr += sprintf( ptr, "OS: Windows (UWP)\n" );
+#elif defined _WIN32
 #  if defined TRACY_WIN32_NO_DESKTOP
     auto GetVersion = &::GetVersionExW;
 #  else
@@ -716,7 +719,11 @@ static const char* GetHostInfo()
 
     ptr += sprintf( ptr, "CPU cores: %i\n", std::thread::hardware_concurrency() );
 
-#if defined _WIN32
+#if defined TRACY_UWP
+    // GlobalMemoryStatusEx() is desktop-only; the app container equivalent is the WinRT
+    // Windows::System::MemoryManager class, which is not reachable from here.
+    ptr += sprintf( ptr, "RAM: unknown\n" );
+#elif defined _WIN32
     MEMORYSTATUSEX statex;
     statex.dwLength = sizeof( statex );
     GlobalMemoryStatusEx( &statex );
@@ -790,6 +797,31 @@ void Profiler::AckSymbolCodeNotAvailable()
     NeedDataSize( QueueDataSize[(int)QueueType::AckSymbolCodeNotAvailable] );
     AppendDataUnsafe( &item, QueueDataSize[(int)QueueType::AckSymbolCodeNotAvailable] );
 }
+
+#ifdef TRACY_REVERSE_CONNECT
+// Reverse connection mode. Set once at most in practice; the previous value is intentionally
+// never freed, because the worker thread may be reading it at the time of the swap.
+static std::atomic<const char*> s_connectAddress { nullptr };
+
+TRACY_API void SetConnectAddress( const char* addr )
+{
+    if( !addr ) return;
+    const auto sz = strlen( addr ) + 1;
+    auto copy = (char*)tracy_malloc( sz );
+    memcpy( copy, addr, sz );
+    s_connectAddress.store( copy, std::memory_order_release );
+}
+
+// Returns null until an address is known, in which case the worker simply keeps waiting.
+static const char* GetConnectAddress()
+{
+    auto addr = s_connectAddress.load( std::memory_order_acquire );
+#ifdef TRACY_CONNECT_ADDRESS
+    if( !addr ) addr = TRACY_CONNECT_ADDRESS;
+#endif
+    return addr;
+}
+#endif
 
 static BroadcastMessage& GetBroadcastMessage( const char* procname, size_t pnsz, int& len, int port )
 {
@@ -1830,6 +1862,13 @@ void Profiler::Worker()
 #else
     const auto broadcastPort = 8086;
 #endif
+#ifdef TRACY_REVERSE_CONNECT
+#  ifdef TRACY_CONNECT_PORT
+    const uint16_t connectPort = TRACY_CONNECT_PORT;
+#  else
+    const uint16_t connectPort = 8087;
+#  endif
+#endif
 
     while( m_timeBegin.load( std::memory_order_relaxed ) == 0 ) std::this_thread::sleep_for( std::chrono::milliseconds( 10 ) );
 
@@ -1930,6 +1969,16 @@ void Profiler::Worker()
 
     moodycamel::ConsumerToken token( GetQueue() );
 
+#ifdef TRACY_REVERSE_CONNECT
+    // Reverse connection mode: dial the server instead of listening for it. Intended for
+    // environments where nothing can reach the process from outside, such as a UWP app
+    // container. The socket is kept across attempts because Socket::Connect() is a resumable
+    // non-blocking state machine.
+    // Allocated only while an attempt is outstanding, so that the exit paths below have
+    // nothing to clean up once ownership has passed to m_sock.
+    (void)dataPortSearch;
+    Socket* connectSock = nullptr;
+#else
     ListenSocket listen;
     bool isListening = false;
     const int reservedFd = s_reservedListenFd.exchange( -1, std::memory_order_acquire );
@@ -1972,8 +2021,11 @@ void Profiler::Worker()
         }
     }
     m_dataPort.store( dataPort, std::memory_order_release );
+#endif
 
-#ifndef TRACY_NO_BROADCAST
+// In reverse connection mode there is no listening socket to announce, and by definition
+// nothing on the network can reach us anyway.
+#if !defined TRACY_NO_BROADCAST && !defined TRACY_REVERSE_CONNECT
     m_broadcast = (UdpBroadcast*)tracy_malloc( sizeof( UdpBroadcast ) );
     new(m_broadcast) UdpBroadcast();
 #  ifdef TRACY_ONLY_LOCALHOST
@@ -2015,12 +2067,40 @@ void Profiler::Worker()
                     broadcastMsg.activeTime = -1;
                     m_broadcast->Send( broadcastPort, &broadcastMsg, broadcastLen );
                 }
+#ifdef TRACY_REVERSE_CONNECT
+                if( connectSock )
+                {
+                    connectSock->~Socket();
+                    tracy_free( connectSock );
+                    connectSock = nullptr;
+                }
+#endif
                 m_shutdownFinished.store( true, std::memory_order_relaxed );
                 return;
             }
 #endif
+#ifdef TRACY_REVERSE_CONNECT
+            if( !connectSock )
+            {
+                connectSock = (Socket*)tracy_malloc( sizeof( Socket ) );
+                new(connectSock) Socket();
+            }
+            // Socket::Connect() is a resumable non-blocking state machine, so the socket has
+            // to survive across attempts.
+            const auto connectAddress = GetConnectAddress();
+            if( connectAddress && connectSock->Connect( connectAddress, connectPort ) )
+            {
+                m_sock = connectSock;
+                connectSock = nullptr;
+                break;
+            }
+            // Paced so that a refused connect does not turn into a connection storm against
+            // the other end. Also bounds how long shutdown waits on this loop.
+            std::this_thread::sleep_for( std::chrono::milliseconds( 250 ) );
+#else
             m_sock = listen.Accept();
             if( m_sock ) break;
+#endif
 #ifndef TRACY_ON_DEMAND
             ProcessSysTime();
 #  ifdef TRACY_HAS_SYSPOWER

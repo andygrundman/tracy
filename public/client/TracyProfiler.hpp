@@ -106,6 +106,13 @@ TRACY_API int32_t NextGpuContextId();
 TRACY_API GpuCtxWrapper& GetGpuCtx();
 TRACY_API uint32_t GetThreadHandle();
 TRACY_API bool ProfilerAvailable();
+#ifdef TRACY_REVERSE_CONNECT
+// Reverse connection mode only: sets the address the client dials out to, overriding the
+// optional TRACY_CONNECT_ADDRESS compile-time default. Until either is set the client just
+// keeps waiting. May be called at any point; the worker picks it up on its next attempt.
+// The string is copied.
+TRACY_API void SetConnectAddress( const char* addr );
+#endif
 TRACY_API bool ProfilerAllocatorAvailable();
 TRACY_API int64_t GetFrequencyQpc();
 

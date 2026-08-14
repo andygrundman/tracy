@@ -22,7 +22,24 @@
 
 #ifdef TRACY_VERBOSE
 #  include <stdio.h>
-#  define TracyDebug(...) do { fprintf( stderr, __VA_ARGS__ ); fputc( '\n', stderr ); } while( 0 )
+#  ifdef _WIN32
+#    include "../common/TracyWinFamily.hpp"
+#  endif
+#  if defined TRACY_WIN32_NO_DESKTOP
+// There is no console to write to, so the debugger output window is the only sink available.
+#    include <windows.h>
+#    define TracyDebug(...) do {                                                                    \
+        char tracyDebugBuf[4096];                                                                   \
+        const int tracyDebugLen = snprintf( tracyDebugBuf, sizeof( tracyDebugBuf ) - 1, __VA_ARGS__ ); \
+        const int tracyDebugEnd = tracyDebugLen < 0 ? 0 :                                           \
+            ( tracyDebugLen < (int)sizeof( tracyDebugBuf ) - 1 ? tracyDebugLen : (int)sizeof( tracyDebugBuf ) - 2 ); \
+        tracyDebugBuf[tracyDebugEnd] = '\n';                                                        \
+        tracyDebugBuf[tracyDebugEnd+1] = '\0';                                                      \
+        OutputDebugStringA( tracyDebugBuf );                                                        \
+    } while( 0 )
+#  else
+#    define TracyDebug(...) do { fprintf( stderr, __VA_ARGS__ ); fputc( '\n', stderr ); } while( 0 )
+#  endif
 // Note: We can't use LogString when using TRACY_DELAYED_INIT due to a deadlock in the init code.
 // This is caused by `GetProfilerData` triggering ProfileData ctor, which itself will call `GetProfilerData` and deadlock.
 // TRACY_MANUAL_LIFETIME does not have this issue since StartupProfiler sets s_profilerData before calling the constructor.

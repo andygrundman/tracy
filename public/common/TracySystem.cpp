@@ -8,14 +8,18 @@
 #  ifndef NOMINMAX
 #    define NOMINMAX
 #  endif
-#  define SECURITY_WIN32
+#  include "TracyWinFamily.hpp"
+#  if !defined TRACY_WIN32_NO_DESKTOP
+#    define SECURITY_WIN32
+#  endif
 #  include <windows.h>
 #  include <malloc.h>
-#  include <lmcons.h>
-#  include <security.h>
-#  include "TracyWinFamily.hpp"
-#  ifdef _MSC_VER
-#    pragma comment(lib, "secur32.lib")
+#  if !defined TRACY_WIN32_NO_DESKTOP
+#    include <lmcons.h>
+#    include <security.h>
+#    ifdef _MSC_VER
+#      pragma comment(lib, "secur32.lib")
+#    endif
 #  endif
 #else
 #  include <pthread.h>
@@ -337,7 +341,12 @@ TRACY_API const char* GetThreadName( uint32_t id )
 
 TRACY_API const char* GetEnvVar( const char* name )
 {
-#if defined _WIN32
+#if defined TRACY_UWP
+    // The Win32 environment strings APIs are not part of the app container API surface,
+    // and UWP apps have no meaningful environment block to begin with. Fall back to the
+    // CRT, which at least lets an app seed values with _putenv() before Tracy starts up.
+    return getenv( name );
+#elif defined _WIN32
     // unfortunately getenv() on Windows is just fundamentally broken.  It caches the entire
     // environment block once on startup, then never refreshes it again.  If any environment
     // strings are added or modified after startup of the CRT, those changes will not be

@@ -31,7 +31,8 @@ void SysTime::ReadTimes()
     FILETIME kernelTime;
     FILETIME userTime;
 
-#    if defined TRACY_GDK
+#    if defined TRACY_WIN32_NO_DESKTOP
+    // GetSystemTimes() is desktop-only; report process time instead of system-wide time.
     FILETIME creationTime;
     FILETIME exitTime;
 

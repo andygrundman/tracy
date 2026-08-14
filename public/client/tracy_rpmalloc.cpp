@@ -129,6 +129,7 @@
 #    define WIN32_LEAN_AND_MEAN
 #  endif
 #  include <windows.h>
+#  include "../common/TracyWinFamily.hpp"
 #  if ENABLE_VALIDATE_ARGS
 #    include <intsafe.h>
 #  endif
@@ -877,7 +878,13 @@ _rpmalloc_mmap_os(size_t size, size_t* offset) {
 	rpmalloc_assert(size >= _memory_page_size, "Invalid mmap size");
 #if PLATFORM_WINDOWS
 	//Ok to MEM_COMMIT - according to MSDN, "actual physical pages are not allocated unless/until the virtual addresses are actually accessed"
+#if defined TRACY_UWP
+	// VirtualAlloc() is desktop-only. VirtualAllocFromApp() is the app container equivalent;
+	// it forbids executable pages, which rpmalloc never asks for anyway.
+	void* ptr = VirtualAllocFromApp(0, size + padding, (_memory_huge_pages ? MEM_LARGE_PAGES : 0) | MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+#else
 	void* ptr = VirtualAlloc(0, size + padding, (_memory_huge_pages ? MEM_LARGE_PAGES : 0) | MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+#endif
 	if (!ptr) {
 		if (_memory_config.map_fail_callback) {
 			if (_memory_config.map_fail_callback(size + padding))
@@ -2780,7 +2787,8 @@ rpmalloc_initialize_config(const rpmalloc_config_t* config) {
 			_memory_huge_pages = 1;
 	}
 
-#if PLATFORM_WINDOWS && !defined TRACY_GDK
+// Large page privileges cannot be adjusted outside of the desktop API partition.
+#if PLATFORM_WINDOWS && !defined TRACY_WIN32_NO_DESKTOP
 	if (_memory_config.enable_huge_pages) {
 		HANDLE token = 0;
 		size_t large_page_minimum = GetLargePageMinimum();

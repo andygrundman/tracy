@@ -11,6 +11,7 @@
 
 // Define TRACY_ENABLE to enable profiler.
 
+#include "common/TracyWinFamily.hpp"
 #include "common/TracySystem.cpp"
 
 #ifdef TRACY_ENABLE
@@ -38,9 +39,14 @@
 #  include "client/TracyRocprof.cpp"
 #endif
 #ifdef _MSC_VER
-#  pragma comment(lib, "ws2_32.lib")
-#  pragma comment(lib, "advapi32.lib")
-#  pragma comment(lib, "user32.lib")
+#  ifdef TRACY_UWP
+// Everything an app container may link against lives in this umbrella library.
+#    pragma comment(lib, "WindowsApp.lib")
+#  else
+#    pragma comment(lib, "ws2_32.lib")
+#    pragma comment(lib, "advapi32.lib")
+#    pragma comment(lib, "user32.lib")
+#  endif
 #  pragma warning(pop)
 #endif
 
