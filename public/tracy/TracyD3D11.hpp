@@ -52,7 +52,9 @@ class D3D11Ctx
 {
     friend class D3D11ZoneScope;
 
-    static constexpr uint32_t MaxQueries = 64 * 1024;
+    // This originally made 64K ID3D11Query calls, and is slow on Xbox. 1024 is more
+    // than enough since we're not using many GPU timings.
+    static constexpr uint32_t MaxQueries = 1024;
 
     enum CollectMode { POLL, BLOCK };
 
